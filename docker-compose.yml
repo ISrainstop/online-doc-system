@@ -1,0 +1,90 @@
+# aaaaa/docker-compose.yml
+version: '3.8'
+
+services:
+  # --- 1. 数据库 ---
+  postgres:
+    image: postgres:15-alpine
+    container_name: doc_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: onlinedoc
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d onlinedoc"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # --- 2. 缓存 (Redis) ---
+  redis:
+    image: redis:alpine
+    container_name: doc_redis
+    restart: always
+    networks:
+      - app-network
+
+  # --- 3. 主业务后端 (Express + Socket.IO) ---
+  server-app:
+    build: ./server-app
+    container_name: doc_server_app
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      PORT: 5000
+      DATABASE_URL: "postgresql://admin:password123@postgres:5432/onlinedoc?schema=public"
+      REDIS_URL: "redis://redis:6379"
+      JWT_SECRET: "your_super_secret_jwt_key"
+      CLIENT_URL: "http://localhost" # 允许 CORS 来源
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    # 🔥 关键：启动前先运行迁移，然后启动服务
+    command: sh -c "npx prisma migrate deploy && npm start"
+    networks:
+      - app-network
+
+  # --- 4. 协同服务 (Yjs WebSocket) ---
+  collab-service:
+    build: ./server
+    container_name: doc_collab_service
+    restart: always
+    environment:
+      PORT: 1234
+      # 协同服务也需要连数据库做权限校验
+      DATABASE_URL: "postgresql://admin:password123@postgres:5432/onlinedoc?schema=public"
+      REDIS_URL: "redis://redis:6379"
+      JWT_SECRET: "your_super_secret_jwt_key"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - app-network
+
+  # --- 5. 前端 (Nginx) ---
+  client:
+    build: ./client
+    container_name: doc_client
+    restart: always
+    ports:
+      - "80:80" # 对外暴露端口
+    depends_on:
+      - server-app
+      - collab-service
+    networks:
+      - app-network
+
+volumes:
+  postgres_data:
+
+networks:
+  app-network:
+    driver: bridge

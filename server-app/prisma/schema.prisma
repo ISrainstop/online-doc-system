@@ -1,0 +1,81 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(uuid())
+  username      String    @unique
+  passwordHash  String
+  email         String?   @unique
+  role          String    @default("USER") // 可选值: 'USER', 'ADMIN'
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // 关系字段
+  documents     Document[]             // 用户创建的文档
+  collaborations DocumentCollaborator[] // 用户参与协作的文档
+  
+  // 🔥 新增：用户创建的历史版本 (解决 Error: missing opposite relation field)
+  createdVersions DocumentVersion[]    
+}
+
+model Document {
+  id            String   @id @default(uuid())
+  title         String
+  content       Json?
+  contentText   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  isDeleted     Boolean  @default(false)
+
+  // 关联：创建者
+  createdById   String
+  // 🔥 修改这里：添加 onDelete: Cascade
+  // 含义：如果用户被删，他创建的文档也会连带被物理删除
+  createdBy     User     @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  // 关联：协作者
+  collaborators DocumentCollaborator[]
+
+  // 版本历史
+  versions      DocumentVersion[]
+}
+
+model DocumentCollaborator {
+  id          String   @id @default(uuid())
+  documentId  String
+  userId      String
+  permission  String   // 'VIEW' | 'EDIT' | 'OWNER'
+  createdAt   DateTime @default(now())
+
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, userId])
+}
+
+// 🔥 新增：版本历史表
+model DocumentVersion {
+  id          String   @id @default(uuid())
+  content     Json     
+  versionName String?
+  createdAt   DateTime @default(now())
+
+  // 关联：所属文档
+  documentId  String
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  // 关联：谁创建的这个版本
+  createdById String?
+  // 🔥 修改这里：添加 onDelete: SetNull
+  // 含义：如果用户被删，他创建的历史版本记录保留，但创建者字段变为空 (因为这个版本可能属于别人的文档)
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+}
